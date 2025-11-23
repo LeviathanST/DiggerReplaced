@@ -151,9 +151,9 @@ pub const Command = union(enum) {
     };
 };
 
-const Language = enum {
-    zig,
-    plaintext,
+pub const Language = enum(i32) {
+    plaintext = 0,
+    zig = 1,
 };
 
 pub fn parse(
@@ -169,7 +169,7 @@ pub fn parse(
         .plaintext => plaintext.parse(alloc, self, normalized_source),
     };
 
-    if (actions.len > 0) {
+    if (actions.len <= 0) {
         var aw = std.Io.Writer.Allocating.init(alloc);
         const errs = try self.errors.toOwnedSlice(alloc);
         for (errs) |err| {
