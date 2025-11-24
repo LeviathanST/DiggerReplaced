@@ -6,6 +6,7 @@ const input = @import("input.zig");
 
 const World = @import("ecs").World;
 const Terminal = @import("../mod.zig").Terminal;
+const Executor = @import("../components.zig").CommandExecutor;
 
 const Rectangle = ecs_common.Rectangle;
 const Position = ecs_common.Position;
@@ -83,7 +84,7 @@ pub fn inClickedRun(w: *World, alloc: std.mem.Allocator) !void {
             .height = @floatFromInt(rec.height),
         },
     )) {
-        if (rl.isMouseButtonPressed(.left)) {
+        if (rl.isMouseButtonPressed(.left) and state.active) {
             try input.process(
                 w,
                 alloc,
@@ -91,5 +92,18 @@ pub fn inClickedRun(w: *World, alloc: std.mem.Allocator) !void {
                 @enumFromInt(state.selected_lang),
             );
         }
+    }
+}
+
+pub fn inCmdRunning(w: *World, _: std.mem.Allocator) !void {
+    const state = try w.getMutResource(State);
+    const executor = (try w.query(&.{ Executor, Terminal }))[0][0];
+    const run_btn = (try w.query(&.{ *Button, Terminal }))[0][0];
+
+    state.*.active = !executor.is_running;
+    if (state.active) {
+        run_btn.content = "Run";
+    } else {
+        run_btn.content = "Executing";
     }
 }
