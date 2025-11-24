@@ -3,8 +3,16 @@ const rl = @import("raylib");
 const digger = @import("../../digger/mod.zig");
 const utils = @import("../utils.zig");
 
+const Terminal = @import("../components.zig").Terminal;
+const Executor = @import("../components.zig").CommandExecutor;
 const Interpreter = @import("../../interpreter/Interpreter.zig");
 const World = @import("ecs").World;
+
+/// Running all available cmds in queue
+pub fn execCmds(w: *World, _: std.mem.Allocator) !void {
+    const executor = (try w.query(&.{ *Executor, Terminal }))[0][0];
+    try executor.execNext(w, 1000);
+}
 
 pub fn scan(
     out: []u8,
@@ -69,17 +77,11 @@ pub fn process(
     content: []const u8,
     lang: Interpreter.Language,
 ) !void {
+    var executor = (try w.query(&.{ *Executor, Terminal }))[0][0];
     var interpreter: Interpreter = .{};
     const cmds = try interpreter.parse(alloc, content, lang);
 
-    try execCmds(w, cmds);
-}
-
-fn execCmds(w: *World, cmds: []const Interpreter.Command) !void {
-    // TODO: time limit
-    for (cmds) |c| {
-        try switch (c) {
-            .move => |direction| digger.action.control(w, direction),
-        };
+    for (cmds) |cmd| {
+        try executor.enqueue(cmd);
     }
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const rl = @import("raylib");
+
 const Language = @import("../interpreter/Interpreter.zig").Language;
 
 pub const Buffer = struct {
@@ -28,6 +29,9 @@ pub const State = struct {
     lang: Language = .plaintext,
     lang_box_is_opened: bool = false,
     selected_lang: i32 = 0,
+    /// Status if the button is clickable .
+    /// Set `false` to disable.
+    active: bool = true,
 };
 
 pub const Style = struct {
