@@ -5,44 +5,26 @@ const Interpreter = @import("Interpreter.zig");
 const Command = Interpreter.Command;
 const Ast = std.zig.Ast;
 
-// Contains all called functions in the main
-const MainNode = std.ArrayList(Node);
-
-const Node = struct {
-    fn_name: []const u8,
-    arg_value: []const u8,
-    arg_node_tag: Ast.Node.Tag,
-};
-
 pub fn parse(
     alloc: std.mem.Allocator,
     interpreter: *Interpreter,
     source: [:0]const u8,
 ) ![]Command {
     var commands: std.ArrayList(Command) = .empty;
-    const command_parser: Command.Parser = .init(alloc, interpreter);
-    const ast = try Ast.parse(alloc, source, .zig);
+    defer commands.deinit(alloc);
 
+    var command_parser: Command.Parser = .init(interpreter);
+    var ast = try Ast.parse(alloc, source, .zig);
+    defer ast.deinit(alloc);
     try extractErrorFromAst(alloc, interpreter, ast);
+
     if (interpreter.errors.items.len > 0) return &.{};
 
-    const main = (try parseMainNode(
+    return parseMainNode(
         alloc,
-        interpreter,
+        &command_parser,
         ast,
-    )) orelse return &.{};
-
-    for (main.items) |node| {
-        const maybe_cmd = try command_parser.parse(
-            node.fn_name,
-            node.arg_value,
-            node.arg_node_tag,
-        );
-        if (maybe_cmd) |cmd| {
-            try commands.append(alloc, cmd);
-        }
-    }
-    return commands.toOwnedSlice(alloc);
+    );
 }
 
 /// Get the first `main` function node index from AST
@@ -77,54 +59,127 @@ pub fn isMain(ast: Ast, index: Ast.Node.Index) bool {
 }
 
 /// Return `null` if the main node not found.
-/// This function can cause to panic due to out of memory.
 fn parseMainNode(
     alloc: std.mem.Allocator,
-    interpreter: *Interpreter,
+    command_parser: *Command.Parser,
     ast: Ast,
-) !?MainNode {
-    var nodes: MainNode = .empty;
+) ![]Command {
+    var cmds: std.ArrayList(Command) = .empty;
+    defer cmds.deinit(alloc);
     // TODO: enable user to declare custom functions, variables, ..., like normal.
     // NOTE: currently, players can only declare the `main` function
     //       and use available functions ingame.
 
     // get main node (`fn main()`)
     const main_node_idx = getMainNodeIdx(ast) orelse {
-        try interpreter.appendError(alloc, .{
+        try command_parser.interpreter.appendError(alloc, .{
             .tag = .main_not_found,
             .token = "",
         });
-        return null;
+        return &.{};
     };
 
     const block_node_idx = ast.nodeData(main_node_idx).node_and_node[1];
     // get nodes in main body
-    var call_node_buf: [2]Ast.Node.Index = undefined;
-    const call_node_idxs = ast.blockStatements(&call_node_buf, block_node_idx).?;
+    var body_node_buf: [2]Ast.Node.Index = undefined;
+    const body_node_idxs = ast.blockStatements(&body_node_buf, block_node_idx).?;
 
-    for (call_node_idxs) |idx| {
-        var call_buf: [1]Ast.Node.Index = undefined;
-        const call = ast.fullCall(&call_buf, idx).?;
-
-        // Extract the call node
-        const fn_name_tok_i = ast.nodes.get(@intFromEnum(call.ast.fn_expr)).main_token;
-        const fn_name = ast.tokenSlice(fn_name_tok_i);
-
-        // NOTE: we know that just one param in the function now.
-        //       EX: `move(.up)`, `move(.down)`
-        const arg_idx = call.ast.params[0];
-        const arg_node_tag = ast.nodeTag(arg_idx);
-
-        const arg_tok_i = ast.nodes.get(@intFromEnum(arg_idx)).main_token;
-        const arg_value = ast.tokenSlice(arg_tok_i);
-
-        try nodes.append(alloc, .{
-            .fn_name = fn_name,
-            .arg_value = arg_value,
-            .arg_node_tag = arg_node_tag,
-        });
+    for (body_node_idxs) |idx| {
+        try parseNode(
+            alloc,
+            command_parser,
+            ast,
+            idx,
+            &cmds,
+        );
     }
-    return nodes;
+
+    return cmds.toOwnedSlice(alloc);
+}
+
+/// Parse AST node by node index and write
+/// commands (can be **one** or **many**) to `list`
+pub fn parseNode(
+    alloc: std.mem.Allocator,
+    command_parser: *Command.Parser,
+    ast: Ast,
+    idx: Ast.Node.Index,
+    list: *std.ArrayList(Command),
+) Command.Parser.Error!void {
+    const node_tag = ast.nodeTag(idx);
+
+    return switch (node_tag) {
+        .call_one => try parseCallNode(alloc, command_parser, ast, idx, list),
+        .if_simple => try parseIfNode(alloc, command_parser, ast, idx, list),
+        else => unreachable, // unsupported node tag
+    };
+}
+
+/// Parse a call node and write a command to the `list`.
+fn parseCallNode(
+    alloc: std.mem.Allocator,
+    command_parser: *Command.Parser,
+    ast: Ast,
+    idx: Ast.Node.Index,
+    list: *std.ArrayList(Command),
+) Command.Parser.Error!void {
+    var call_buf: [1]Ast.Node.Index = undefined;
+    const call = ast.fullCall(&call_buf, idx).?;
+
+    // Extract the call node
+    const fn_name_tok_i = ast.nodes.get(@intFromEnum(call.ast.fn_expr)).main_token;
+    const fn_name = ast.tokenSlice(fn_name_tok_i);
+
+    // NOTE: we know that just one param in the function now.
+    //       EX: `move(.up)`, `move(.down)`
+    const arg_idx = call.ast.params[0];
+    const arg_node_tag = ast.nodeTag(arg_idx);
+
+    const arg_tok_i = ast.nodes.get(@intFromEnum(arg_idx)).main_token;
+    const arg_value = ast.tokenSlice(arg_tok_i);
+
+    const optional = try command_parser.parse(alloc, fn_name, arg_value, arg_node_tag);
+
+    if (optional) |cmd| {
+        list.append(alloc, cmd) catch return Command.Parser.Error.OutOfMemory;
+    }
+}
+
+/// Parse all nodes of the `if` body and write all to
+/// the `list`.
+fn parseIfNode(
+    alloc: std.mem.Allocator,
+    command_parser: *Command.Parser,
+    ast: Ast,
+    idx: Ast.Node.Index,
+    list: *std.ArrayList(Command),
+) Command.Parser.Error!void {
+    const if_statement = ast.ifSimple(idx);
+
+    const cond_expr_idx = if_statement.ast.cond_expr;
+    const cond_expr_node = ast.nodeMainToken(cond_expr_idx);
+    var num_of_cmds: u64 = 0;
+
+    const items_count = list.items.len;
+    list.append(alloc, .{ .@"if" = .{
+        .condition_value = std.mem.eql(u8, ast.tokenSlice(cond_expr_node), "true"),
+        .num_of_cmds = 0,
+    } }) catch return Command.Parser.Error.OutOfMemory;
+
+    const semi_node_idx = if_statement.ast.then_expr;
+    var if_body_buf: [2]Ast.Node.Index = undefined;
+    const if_body_nodes = ast.blockStatements(&if_body_buf, semi_node_idx).?;
+
+    for (if_body_nodes) |i| {
+        num_of_cmds += 1;
+        // TODO: remove this assert
+        // NOTE: currently, just support call nodes in the `if` statement body
+        std.debug.assert(ast.nodeTag(i) == .call_one);
+        try parseNode(alloc, command_parser, ast, i, list);
+    }
+
+    // set the value for `num_of_cmds` of the `if` command
+    list.items[items_count].@"if".num_of_cmds = num_of_cmds;
 }
 
 fn extractErrorFromAst(
@@ -151,25 +206,25 @@ fn extractErrorFromAst(
     }
 }
 
-test "parse action (zig)" {
+test "(zig) parse command: calling functions" {
+    const alloc = std.testing.allocator;
     var interpreter: Interpreter = .{};
-
-    // simulate the `World.arena`
-    var base_alloc = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer base_alloc.deinit();
-    const alloc = base_alloc.allocator();
+    interpreter.deinit(alloc);
 
     const src1 =
         \\pub fn main() void {}
     ;
 
     const cmds1 = try parse(alloc, &interpreter, src1);
+    defer alloc.free(cmds1);
     try std.testing.expectEqual(0, cmds1.len);
 
     const src2 =
         \\pub fn () void {}
     ;
-    _ = try parse(alloc, &interpreter, src2);
+    const cmds2 = try parse(alloc, &interpreter, src2);
+    defer alloc.free(cmds2);
+
     const err2: Interpreter.Error = .{
         .tag = .main_not_found,
         .token = "",
@@ -187,10 +242,37 @@ test "parse action (zig)" {
         \\}
     ;
     const cmds3 = try parse(alloc, &interpreter, src3);
+    defer alloc.free(cmds3);
     try std.testing.expectEqual(4, cmds3.len);
     try std.testing.expectEqual(.up, cmds3[0].move);
     try std.testing.expectEqual(.down, cmds3[1].move);
     try std.testing.expectEqual(.left, cmds3[2].move);
     try std.testing.expectEqual(.right, cmds3[3].move);
     interpreter.errors.shrinkAndFree(alloc, 0); // reset errors
+}
+
+test "(zig) parse command: if statement" {
+    var interpreter: Interpreter = .{};
+    const alloc = std.testing.allocator;
+    interpreter.deinit(alloc);
+
+    const src1 =
+        \\pub fn main() void {
+        \\  if(true) {
+        \\     move(.down);
+        \\  }
+        \\
+        \\  if(false) {
+        \\     move(.down);
+        \\  }
+        \\}
+    ;
+    const cmds1 = try parse(alloc, &interpreter, src1);
+    defer alloc.free(cmds1);
+
+    try std.testing.expectEqual(4, cmds1.len);
+    try std.testing.expectEqual(.up, cmds1[0].move);
+    try std.testing.expectEqual(.down, cmds1[1].move);
+    try std.testing.expectEqual(.left, cmds1[2].move);
+    try std.testing.expectEqual(.right, cmds1[3].move);
 }
