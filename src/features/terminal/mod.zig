@@ -87,6 +87,6 @@ pub fn spawn(w: *World, _: std.mem.Allocator) !void {
     // the command executor
     w.spawnEntity(&.{ Terminal, Executor }, .{
         .{},
-        try .init(w.alloc),
+        .init(w.alloc),
     });
 }
