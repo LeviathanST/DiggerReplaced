@@ -41,6 +41,14 @@ pub const Error = struct {
         not_supported_type,
     };
 
+    pub fn deinit(self: *Error, alloc: std.mem.Allocator) void {
+        switch (self.tag) {
+            .expected_type_action => alloc.free(self.extra.expected_token),
+            .from_languages => alloc.free(self.extra.from_languages),
+            else => {},
+        }
+    }
+
     /// Write the `err` message to `writer`.
     ///
     /// TODO: display hints to fix error.
@@ -196,6 +204,7 @@ pub const Language = enum(i32) {
     zig = 1,
 };
 
+/// The caller should `free` the return value.
 pub fn parse(
     self: *Interpreter,
     alloc: std.mem.Allocator,
@@ -203,18 +212,29 @@ pub fn parse(
     lang: Language,
 ) ![]Command {
     const normalized_source = try utils.normalizedSource(alloc, source);
+    defer alloc.free(normalized_source);
 
     const actions = try switch (lang) {
         .zig => zig.parse(alloc, self, normalized_source),
         .plaintext => plaintext.parse(alloc, self, normalized_source),
     };
 
-    if (actions.len <= 0) {
+    if (self.errors.items.len > 0) {
         var aw = std.Io.Writer.Allocating.init(alloc);
+        defer aw.deinit();
         const errs = try self.errors.toOwnedSlice(alloc);
-        for (errs) |err| {
+        defer {
+            alloc.free(errs);
+            self.errors.deinit(alloc);
+        }
+
+        for (errs) |*err| {
             try err.render(&aw.writer);
-            std.log.debug("{s}", .{try aw.toOwnedSlice()});
+            defer err.deinit(alloc);
+
+            const msg = try aw.toOwnedSlice();
+            defer alloc.free(msg);
+            std.log.debug("{s}", .{msg});
         }
     }
 

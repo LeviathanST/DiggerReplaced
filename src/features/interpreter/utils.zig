@@ -8,8 +8,6 @@ const std = @import("std");
 ///
 /// This function asserts that the string must be a valid format:
 /// * `features.<object-name>.<...>.<ActionType>`
-///
-/// This function can cause to panic due to out of memory.
 pub fn normalizedActionType(
     alloc: std.mem.Allocator,
     str: []const u8,

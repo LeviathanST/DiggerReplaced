@@ -79,7 +79,9 @@ pub fn process(
 ) !void {
     var executor = (try w.query(&.{ *Executor, Terminal }))[0][0];
     var interpreter: Interpreter = .{};
+
     const cmds = try interpreter.parse(alloc, content, lang);
+    defer alloc.free(cmds);
 
     for (cmds) |cmd| {
         try executor.enqueue(cmd);
