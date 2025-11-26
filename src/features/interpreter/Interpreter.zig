@@ -22,7 +22,10 @@ pub const Error = struct {
     tag: Tag,
     extra: union(enum) {
         none: void,
-        expected_token: []const u8,
+        expected_token: union(enum) {
+            allocated_str: []const u8,
+            str: []const u8,
+        },
         from_languages: [][]const u8,
     } = .{ .none = {} },
     token: []const u8,
@@ -43,9 +46,42 @@ pub const Error = struct {
 
     pub fn deinit(self: *Error, alloc: std.mem.Allocator) void {
         switch (self.tag) {
-            .expected_type_action => alloc.free(self.extra.expected_token),
+            .expected_type_action => switch (self.extra.expected_token) {
+                .allocated_str => |str| alloc.free(str),
+                else => {},
+            },
             .from_languages => alloc.free(self.extra.from_languages),
             else => {},
+        }
+    }
+
+    pub fn expectTypeAction(
+        alloc: std.mem.Allocator,
+        interpreter: *Interpreter,
+        expected_token: []const u8,
+        found_token: []const u8,
+        is_allocated: bool,
+    ) !void {
+        if (is_allocated) {
+            interpreter.appendError(alloc, .{
+                .tag = .expected_type_action,
+                .extra = .{
+                    .expected_token = .{
+                        .allocated_str = expected_token,
+                    },
+                },
+                .token = found_token,
+            }) catch return Command.Parser.ParseError.OutOfMemory;
+        } else {
+            interpreter.appendError(alloc, .{
+                .tag = .expected_type_action,
+                .extra = .{
+                    .expected_token = .{
+                        .str = expected_token,
+                    },
+                },
+                .token = found_token,
+            }) catch return Command.Parser.ParseError.OutOfMemory;
         }
     }
 
@@ -61,10 +97,14 @@ pub const Error = struct {
                 }
             },
             .unknown_action => w.print("function `{s}` unknown.", .{err.token}),
-            .expected_type_action => w.print(
-                "expected `{s}` type, found `{s}`.",
-                .{ err.extra.expected_token, err.token },
-            ),
+            .expected_type_action => switch (err.extra.expected_token) {
+                inline else => |v| {
+                    try w.print(
+                        "expected `{s}` type, found `{s}`.",
+                        .{ v, err.token },
+                    );
+                },
+            },
             // TODO: remove this error
             .not_supported_type => w.print(
                 "not supported type `{s}`, please contact with developers if you see this error.",
@@ -74,20 +114,89 @@ pub const Error = struct {
     }
 };
 
+/// All *enum variant names* in the `Command` will be named according
+/// to **the Zig function naming convention**. You can *convert* a implemented
+/// language function name convention *into* enum variant names by *string
+/// operations*.
 pub const Command = union(enum) {
     @"if": IfStatementInfo,
+    // Commands in game
     move: @import("../digger/mod.zig").move.MoveDirection,
+    isEdge: @import("../digger/mod.zig").check.EdgeDirection,
 
     pub const IfStatementInfo = struct {
-        condition_value: bool,
+        condition: CondExpr,
         /// number of commands in the `if` body
         num_of_cmds: u64,
+
+        /// The condition expression
+        pub const CondExpr = union(enum) {
+            /// if (callA()) {...}
+            ///
+            /// Use **an expression** to evaluate the condition value.
+            ///
+            /// If this type is enabled, the expression should be
+            /// append after the `if` command.
+            expr,
+            /// (lhs and rhs)
+            ///
+            /// lhs, rhs: an expression or boolean value
+            ///
+            /// If this type is enabled, expressions should be
+            /// append after the `if` command.
+            expr_and: struct { *CondExpr, *CondExpr },
+            /// (lhs or rhs)
+            ///
+            /// lhs, rhs: an expression or boolean value
+            ///
+            /// If this type is enabled, expressions should be
+            /// append after the `if` command.
+            expr_or: struct { *CondExpr, *CondExpr },
+            /// !lhs
+            ///
+            /// If this type is enabled, expressions should be
+            /// append after the `if` command.
+            not_expr: struct { *CondExpr },
+            /// if(true) {...}
+            /// if(false) {...}
+            ///
+            /// Assign the boolean value directly.
+            value: bool,
+
+            pub fn deinit(self: *CondExpr, alloc: std.mem.Allocator) void {
+                switch (self.*) {
+                    .expr_and => |v| {
+                        alloc.destroy(v[0]);
+                        alloc.destroy(v[1]);
+                    },
+                    .expr_or => |v| {
+                        alloc.destroy(v[0]);
+                        alloc.destroy(v[1]);
+                    },
+                    .not_expr => |v| {
+                        alloc.destroy(v[0]);
+                    },
+                    else => {},
+                }
+            }
+        };
+
+        pub fn deinit(self: *IfStatementInfo, alloc: std.mem.Allocator) void {
+            self.condition.deinit(alloc);
+        }
+
+        pub fn default() IfStatementInfo {
+            return .{
+                .condition = undefined,
+                .num_of_cmds = 0,
+            };
+        }
     };
 
     pub const Parser = struct {
         interpreter: *Interpreter,
 
-        pub const Error = error{OutOfMemory};
+        pub const ParseError = error{OutOfMemory};
 
         pub fn init(i: *Interpreter) Parser {
             return .{
@@ -101,7 +210,7 @@ pub const Command = union(enum) {
             cmd_name: []const u8,
             cmd_value: anytype,
             node_tag: std.zig.Ast.Node.Tag,
-        ) Parser.Error!?Command {
+        ) ParseError!?Command {
             inline for (std.meta.fields(Command)) |f| {
                 if (std.mem.eql(u8, f.name, cmd_name)) {
                     if (try self.parseArg(
@@ -150,7 +259,7 @@ pub const Command = union(enum) {
             comptime cmd: []const u8,
             cmd_value: anytype,
             node_tag: std.zig.Ast.Node.Tag,
-        ) Parser.Error!?@FieldType(Command, cmd) {
+        ) ParseError!?@FieldType(Command, cmd) {
             const typeInfo = @typeInfo(@FieldType(Command, cmd));
             // TODO: handle more data types:
             //       + Struct
@@ -161,25 +270,33 @@ pub const Command = union(enum) {
                         std.debug.panic("Expected `[]const u8`, found `{s}`.", .{
                             @typeName(@TypeOf(cmd_value)),
                         });
-                    std.debug.assert(node_tag == .enum_literal);
+                    if (node_tag != .enum_literal)
+                        try Error.expectTypeAction(
+                            alloc,
+                            self.interpreter,
+                            "enum_literal",
+                            @tagName(node_tag),
+                            false,
+                        );
 
                     const T = @FieldType(Command, cmd);
-                    const normalized_action_type = utils.normalizedActionType(
-                        alloc,
-                        @typeName(T),
-                    ) catch return Parser.Error.OutOfMemory;
 
                     return std.meta.stringToEnum(
                         T,
                         cmd_value,
                     ) orelse {
-                        self.interpreter.appendError(alloc, .{
-                            .tag = .expected_type_action,
-                            .extra = .{
-                                .expected_token = normalized_action_type,
-                            },
-                            .token = cmd_value,
-                        }) catch return Parser.Error.OutOfMemory;
+                        const normalized_action_type = utils.normalizedActionType(
+                            alloc,
+                            @typeName(T),
+                        ) catch return ParseError.OutOfMemory;
+                        errdefer alloc.free(normalized_action_type);
+                        try Error.expectTypeAction(
+                            alloc,
+                            self.interpreter,
+                            normalized_action_type,
+                            cmd_value,
+                            true,
+                        );
                         return null;
                     };
                 },
