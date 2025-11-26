@@ -3,6 +3,8 @@ const std = @import("std");
 const Interpreter = @import("Interpreter.zig");
 
 const Command = Interpreter.Command;
+const CondExpr = Interpreter.Command.IfStatementInfo.CondExpr;
+const ParseError = Interpreter.Command.Parser.ParseError;
 const Ast = std.zig.Ast;
 
 pub fn parse(
@@ -105,7 +107,7 @@ pub fn parseNode(
     ast: Ast,
     idx: Ast.Node.Index,
     list: *std.ArrayList(Command),
-) Command.Parser.Error!void {
+) ParseError!void {
     const node_tag = ast.nodeTag(idx);
 
     return switch (node_tag) {
@@ -122,7 +124,7 @@ fn parseCallNode(
     ast: Ast,
     idx: Ast.Node.Index,
     list: *std.ArrayList(Command),
-) Command.Parser.Error!void {
+) ParseError!void {
     var call_buf: [1]Ast.Node.Index = undefined;
     const call = ast.fullCall(&call_buf, idx).?;
 
@@ -141,7 +143,7 @@ fn parseCallNode(
     const optional = try command_parser.parse(alloc, fn_name, arg_value, arg_node_tag);
 
     if (optional) |cmd| {
-        list.append(alloc, cmd) catch return Command.Parser.Error.OutOfMemory;
+        list.append(alloc, cmd) catch return Command.Parser.ParseError.OutOfMemory;
     }
 }
 
@@ -153,18 +155,18 @@ fn parseIfNode(
     ast: Ast,
     idx: Ast.Node.Index,
     list: *std.ArrayList(Command),
-) Command.Parser.Error!void {
+) ParseError!void {
     const if_statement = ast.ifSimple(idx);
-
     const cond_expr_idx = if_statement.ast.cond_expr;
-    const cond_expr_node = ast.nodeMainToken(cond_expr_idx);
     var num_of_cmds: u64 = 0;
-
     const items_count = list.items.len;
-    list.append(alloc, .{ .@"if" = .{
-        .condition_value = std.mem.eql(u8, ast.tokenSlice(cond_expr_node), "true"),
-        .num_of_cmds = 0,
-    } }) catch return Command.Parser.Error.OutOfMemory;
+
+    list.append(alloc, .{
+        .@"if" = .default(),
+    }) catch return Command.Parser.ParseError.OutOfMemory;
+
+    const if_cond = try parseIfCond(alloc, command_parser, ast, cond_expr_idx, list);
+    list.items[items_count].@"if".condition = if_cond;
 
     const semi_node_idx = if_statement.ast.then_expr;
     var if_body_buf: [2]Ast.Node.Index = undefined;
@@ -180,6 +182,51 @@ fn parseIfNode(
 
     // set the value for `num_of_cmds` of the `if` command
     list.items[items_count].@"if".num_of_cmds = num_of_cmds;
+}
+
+/// if (<cond_expr>) {...}
+pub fn parseIfCond(
+    alloc: std.mem.Allocator,
+    command_parser: *Command.Parser,
+    ast: Ast,
+    idx: Ast.Node.Index,
+    list: *std.ArrayList(Command),
+) !Command.IfStatementInfo.CondExpr {
+    const node_tag = ast.nodeTag(idx);
+    var cond: Command.IfStatementInfo.CondExpr = undefined;
+
+    switch (node_tag) {
+        .identifier => {
+            const main_token = ast.nodeMainToken(idx);
+            cond = .{ .value = std.mem.eql(
+                u8,
+                ast.tokenSlice(main_token),
+                "true",
+            ) };
+        },
+        .call_one => {
+            try parseCallNode(alloc, command_parser, ast, idx, list);
+            cond = .{ .expr = {} };
+        },
+        .bool_and => {
+            const node_data = ast.nodeData(idx).node_and_node;
+            const lhs: *CondExpr = try alloc.create(CondExpr);
+            errdefer alloc.destroy(lhs);
+            lhs.* = try parseIfCond(alloc, command_parser, ast, node_data[0], list);
+
+            const rhs: *CondExpr = try alloc.create(CondExpr);
+            errdefer alloc.destroy(rhs);
+            rhs.* = try parseIfCond(alloc, command_parser, ast, node_data[1], list);
+
+            cond = .{ .expr_and = .{ .@"0" = lhs, .@"1" = rhs } };
+        },
+        // TODO:
+        // .bool_or => {},
+        // .bool_not => {},
+        else => unreachable,
+    }
+
+    return cond;
 }
 
 fn extractErrorFromAst(
@@ -209,7 +256,6 @@ fn extractErrorFromAst(
 test "(zig) parse command: calling functions" {
     const alloc = std.testing.allocator;
     var interpreter: Interpreter = .{};
-    interpreter.deinit(alloc);
 
     const src1 =
         \\pub fn main() void {}
@@ -254,7 +300,6 @@ test "(zig) parse command: calling functions" {
 test "(zig) parse command: if statement" {
     var interpreter: Interpreter = .{};
     const alloc = std.testing.allocator;
-    interpreter.deinit(alloc);
 
     const src1 =
         \\pub fn main() void {
@@ -271,8 +316,20 @@ test "(zig) parse command: if statement" {
     defer alloc.free(cmds1);
 
     try std.testing.expectEqual(4, cmds1.len);
-    try std.testing.expectEqual(.up, cmds1[0].move);
+    try std.testing.expectEqual(
+        Command.IfStatementInfo{
+            .condition = .{ .value = true },
+            .num_of_cmds = 1,
+        },
+        cmds1[0].@"if",
+    );
     try std.testing.expectEqual(.down, cmds1[1].move);
-    try std.testing.expectEqual(.left, cmds1[2].move);
-    try std.testing.expectEqual(.right, cmds1[3].move);
+    try std.testing.expectEqual(
+        Command.IfStatementInfo{
+            .condition = .{ .value = false },
+            .num_of_cmds = 1,
+        },
+        cmds1[2].@"if",
+    );
+    try std.testing.expectEqual(.down, cmds1[3].move);
 }
