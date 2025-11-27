@@ -220,9 +220,26 @@ pub fn parseIfCond(
 
             cond = .{ .expr_and = .{ .@"0" = lhs, .@"1" = rhs } };
         },
-        // TODO:
-        // .bool_or => {},
-        // .bool_not => {},
+        .bool_or => {
+            const node_data = ast.nodeData(idx).node_and_node;
+            const lhs: *CondExpr = try alloc.create(CondExpr);
+            errdefer alloc.destroy(lhs);
+            lhs.* = try parseIfCond(alloc, command_parser, ast, node_data[0], list);
+
+            const rhs: *CondExpr = try alloc.create(CondExpr);
+            errdefer alloc.destroy(rhs);
+            rhs.* = try parseIfCond(alloc, command_parser, ast, node_data[1], list);
+
+            cond = .{ .expr_or = .{ .@"0" = lhs, .@"1" = rhs } };
+        },
+        .bool_not => {
+            const node_data = ast.nodeData(idx).node;
+            const lhs: *CondExpr = try alloc.create(CondExpr);
+            errdefer alloc.destroy(lhs);
+            lhs.* = try parseIfCond(alloc, command_parser, ast, node_data, list);
+
+            cond = .{ .not_expr = .{ .@"0" = lhs } };
+        },
         else => unreachable,
     }
 

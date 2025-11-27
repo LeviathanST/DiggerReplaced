@@ -116,7 +116,7 @@ pub const CommandExecutor = struct {
             .@"if" => |info| {
                 const cond_expr_result = try self.*.evaluateCondExpr(
                     w,
-                    info.condition,
+                    @constCast(&info.condition),
                     info.num_of_cmds,
                 );
 
@@ -136,11 +136,13 @@ pub const CommandExecutor = struct {
     fn evaluateCondExpr(
         self: *CommandExecutor,
         w: *World,
-        condition: Interpreter.Command.IfStatementInfo.CondExpr,
+        condition: *Interpreter.Command.IfStatementInfo.CondExpr,
         /// Number of cmds in the `if` body
         num_of_cmds: u64,
     ) !bool {
-        switch (condition) {
+        defer condition.deinit(self.alloc);
+
+        switch (condition.*) {
             .value => |v| return v,
             .expr => {
                 const expr_cmd = self.dequeue().?;
@@ -149,18 +151,28 @@ pub const CommandExecutor = struct {
             },
             .expr_and => |expr| {
                 const lhs = expr[1];
-                defer self.alloc.destroy(lhs);
-                const lhs_value = try self.evaluateCondExpr(w, lhs.*, num_of_cmds);
+                const lhs_value = try self.evaluateCondExpr(w, lhs, num_of_cmds);
 
                 const rhs = expr[0];
-                defer self.alloc.destroy(rhs);
-                const rhs_value = try self.evaluateCondExpr(w, rhs.*, num_of_cmds);
+                const rhs_value = try self.evaluateCondExpr(w, rhs, num_of_cmds);
 
                 return (lhs_value and rhs_value);
             },
-            // TODO:
-            .expr_or => return false,
-            .not_expr => return false,
+            .expr_or => |expr| {
+                const lhs = expr[1];
+                const lhs_value = try self.evaluateCondExpr(w, lhs, num_of_cmds);
+
+                const rhs = expr[0];
+                const rhs_value = try self.evaluateCondExpr(w, rhs, num_of_cmds);
+
+                return (lhs_value or rhs_value);
+            },
+            .not_expr => |expr| {
+                const lhs = expr[0];
+                const lhs_value = try self.evaluateCondExpr(w, lhs, num_of_cmds);
+
+                return !lhs_value;
+            },
         }
     }
 };
