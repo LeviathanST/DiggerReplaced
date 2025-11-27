@@ -50,7 +50,12 @@ pub const Error = struct {
                 .allocated_str => |str| alloc.free(str),
                 else => {},
             },
-            .from_languages => alloc.free(self.extra.from_languages),
+            .from_languages => {
+                for (self.extra.from_languages) |err| {
+                    alloc.free(err);
+                }
+                alloc.free(self.extra.from_languages);
+            },
             else => {},
         }
     }
