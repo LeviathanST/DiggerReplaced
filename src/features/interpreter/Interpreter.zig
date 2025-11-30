@@ -201,7 +201,7 @@ pub const Command = union(enum) {
     pub const Parser = struct {
         interpreter: *Interpreter,
 
-        pub const ParseError = error{OutOfMemory};
+        pub const ParseError = std.mem.Allocator.Error || std.fmt.ParseIntError;
 
         pub fn init(i: *Interpreter) Parser {
             return .{
@@ -290,10 +290,10 @@ pub const Command = union(enum) {
                         T,
                         cmd_value,
                     ) orelse {
-                        const normalized_action_type = utils.normalizedActionType(
+                        const normalized_action_type = try utils.normalizedActionType(
                             alloc,
                             @typeName(T),
-                        ) catch return ParseError.OutOfMemory;
+                        );
                         errdefer alloc.free(normalized_action_type);
                         try Error.expectTypeAction(
                             alloc,
