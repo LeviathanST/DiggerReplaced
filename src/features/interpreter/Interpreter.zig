@@ -125,125 +125,126 @@ pub const Error = struct {
 /// operations*.
 pub const Command = union(enum) {
     @"if": IfStatementInfo,
+    @"while": WhileStatementInfo,
     @"for": ForStatementInfo,
     end_loop: void,
     // Commands in game
     move: @import("../digger/mod.zig").move.MoveDirection,
     isEdge: @import("../digger/mod.zig").check.EdgeDirection,
 
+    /// The condition expressions
+    pub const CondExpr = union(enum) {
+        /// This field using for comparision operators
+        /// (!=, >, < <=, >=, ==)
+        number_literal: isize,
+        /// if(true) {...}
+        /// if(false) {...}
+        ///
+        /// Using boolean values literally.
+        literal: bool,
+        /// if (callA()) {...}
+        ///
+        /// Use **an expression** to evaluate the condition value.
+        ///
+        /// If this type is enabled, the expression should be
+        /// append after the `if` command.
+        expr,
+        /// (lhs and rhs)
+        ///
+        /// lhs, rhs: an expression or boolean value
+        ///
+        /// If this type is enabled, expressions should be
+        /// append after the `if` command.
+        expr_and: struct { *CondExpr, *CondExpr },
+        /// (lhs or rhs)
+        ///
+        /// lhs, rhs: an expression or boolean value
+        ///
+        /// If this type is enabled, expressions should be
+        /// append after the `if` command.
+        expr_or: struct { *CondExpr, *CondExpr },
+        /// !lhs
+        ///
+        /// lhs: an expression or boolean value
+        ///
+        /// If this type is enabled, expressions should be
+        /// append after the `if` command.
+        not_expr: struct { *CondExpr },
+        /// lhs > rhs
+        ///
+        /// lhs, rhs: an expression or number value
+        ///
+        /// If this type is enabled, expressions should be
+        /// append after the `if` command.
+        greater: struct { *CondExpr, *CondExpr },
+        /// lhs >= rhs
+        ///
+        /// lhs: an expression or number value
+        ///
+        /// If this type is enabled, expressions should be
+        /// append after the `if` command.
+        greater_or_equal: struct { *CondExpr, *CondExpr },
+        /// lhs < rhs
+        ///
+        /// lhs, rhs: an expression or number literal
+        ///
+        /// If this type is enabled, expressions should be
+        /// append after the `if` command.
+        less: struct { *CondExpr, *CondExpr },
+        /// lhs <= rhs
+        ///
+        /// lhs, rhs: an expression or number literal
+        ///
+        /// If this type is enabled, expressions should be
+        /// append after the `if` command.
+        less_or_equal: struct { *CondExpr, *CondExpr },
+        /// lhs == rhs
+        ///
+        /// lhs, rhs: an expression or number literal
+        ///
+        /// If this type is enabled, expressions should be
+        /// append after the `if` command.
+        equal: struct { *CondExpr, *CondExpr },
+        /// lhs != rhs
+        ///
+        /// lhs, rhs: an expression or number literal
+        ///
+        /// If this type is enabled, expressions should be
+        /// append after the `if` command.
+        diff: struct { *CondExpr, *CondExpr },
+
+        pub fn deinit(self: *CondExpr, alloc: std.mem.Allocator) void {
+            switch (self.*) {
+                .expr_and,
+                .expr_or,
+
+                .greater,
+                .greater_or_equal,
+                .less,
+                .less_or_equal,
+                .equal,
+                .diff,
+                => |v| {
+                    v.@"0".deinit(alloc);
+                    v.@"1".deinit(alloc);
+                    alloc.destroy(v[0]);
+                    alloc.destroy(v[1]);
+                },
+
+                .not_expr => |v| {
+                    v.@"0".deinit(alloc);
+                    alloc.destroy(v[0]);
+                },
+
+                else => {},
+            }
+        }
+    };
+
     pub const IfStatementInfo = struct {
         condition: CondExpr,
         /// number of commands in the `if` body
         num_of_cmds: u64,
-
-        /// The condition expression
-        pub const CondExpr = union(enum) {
-            /// This field using for comparision operators
-            /// (!=, >, < <=, >=, ==)
-            number_literal: isize,
-            /// if(true) {...}
-            /// if(false) {...}
-            ///
-            /// Using boolean values literally.
-            literal: bool,
-            /// if (callA()) {...}
-            ///
-            /// Use **an expression** to evaluate the condition value.
-            ///
-            /// If this type is enabled, the expression should be
-            /// append after the `if` command.
-            expr,
-            /// (lhs and rhs)
-            ///
-            /// lhs, rhs: an expression or boolean value
-            ///
-            /// If this type is enabled, expressions should be
-            /// append after the `if` command.
-            expr_and: struct { *CondExpr, *CondExpr },
-            /// (lhs or rhs)
-            ///
-            /// lhs, rhs: an expression or boolean value
-            ///
-            /// If this type is enabled, expressions should be
-            /// append after the `if` command.
-            expr_or: struct { *CondExpr, *CondExpr },
-            /// !lhs
-            ///
-            /// lhs: an expression or boolean value
-            ///
-            /// If this type is enabled, expressions should be
-            /// append after the `if` command.
-            not_expr: struct { *CondExpr },
-            /// lhs > rhs
-            ///
-            /// lhs, rhs: an expression or number value
-            ///
-            /// If this type is enabled, expressions should be
-            /// append after the `if` command.
-            greater: struct { *CondExpr, *CondExpr },
-            /// lhs >= rhs
-            ///
-            /// lhs: an expression or number value
-            ///
-            /// If this type is enabled, expressions should be
-            /// append after the `if` command.
-            greater_or_equal: struct { *CondExpr, *CondExpr },
-            /// lhs < rhs
-            ///
-            /// lhs, rhs: an expression or number literal
-            ///
-            /// If this type is enabled, expressions should be
-            /// append after the `if` command.
-            less: struct { *CondExpr, *CondExpr },
-            /// lhs <= rhs
-            ///
-            /// lhs, rhs: an expression or number literal
-            ///
-            /// If this type is enabled, expressions should be
-            /// append after the `if` command.
-            less_or_equal: struct { *CondExpr, *CondExpr },
-            /// lhs == rhs
-            ///
-            /// lhs, rhs: an expression or number literal
-            ///
-            /// If this type is enabled, expressions should be
-            /// append after the `if` command.
-            equal: struct { *CondExpr, *CondExpr },
-            /// lhs != rhs
-            ///
-            /// lhs, rhs: an expression or number literal
-            ///
-            /// If this type is enabled, expressions should be
-            /// append after the `if` command.
-            diff: struct { *CondExpr, *CondExpr },
-
-            pub fn deinit(self: *CondExpr, alloc: std.mem.Allocator) void {
-                switch (self.*) {
-                    .expr_and,
-                    .expr_or,
-
-                    .greater,
-                    .greater_or_equal,
-                    .less,
-                    .less_or_equal,
-                    .equal,
-                    .diff,
-                    => |v| {
-                        v.@"0".deinit(alloc);
-                        v.@"1".deinit(alloc);
-                        alloc.destroy(v[0]);
-                        alloc.destroy(v[1]);
-                    },
-
-                    .not_expr => |v| {
-                        v.@"0".deinit(alloc);
-                        alloc.destroy(v[0]);
-                    },
-
-                    else => {},
-                }
-            }
-        };
 
         pub fn deinit(self: *IfStatementInfo, alloc: std.mem.Allocator) void {
             self.condition.deinit(alloc);
@@ -257,8 +258,16 @@ pub const Command = union(enum) {
         }
     };
 
-    pub const ForStatementInfo = struct {
+    pub const WhileStatementInfo = struct {
+        /// Boolean conditions
         condition: CondExpr,
+        /// number of commands in the `while` body
+        start_idx: u64,
+    };
+
+    pub const ForStatementInfo = struct {
+        /// Slices
+        condition: @This().CondExpr,
         /// The index of the `for` statement in list
         start_idx: u64,
 

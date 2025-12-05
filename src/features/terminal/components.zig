@@ -127,7 +127,6 @@ pub const CommandExecutor = struct {
                 const cond_expr_result = try self.*.evaluateCondExpr(
                     w,
                     @constCast(&info.condition),
-                    info.num_of_cmds,
                 );
 
                 if (!cond_expr_result.bool) {
@@ -138,6 +137,24 @@ pub const CommandExecutor = struct {
                     while (curr_node != null and idx < info.num_of_cmds) {
                         curr_node = self.next();
                         idx += 1;
+                    }
+                }
+            },
+            .@"while" => |info| {
+                const cond_expr_result = try self.*.evaluateCondExpr(
+                    w,
+                    @constCast(&info.condition),
+                );
+
+                if (cond_expr_result.bool) {
+                    if (self.loop_state) |*state| {
+                        state.total_iter += 1;
+                    } else {
+                        self.loop_state = .{
+                            // back to the `while` statement to re-evaluate the condition
+                            .start_idx = info.start_idx,
+                            .total_iter = 1,
+                        };
                     }
                 }
             },
@@ -174,9 +191,7 @@ pub const CommandExecutor = struct {
     fn evaluateCondExpr(
         self: *CommandExecutor,
         w: *World,
-        condition: *Interpreter.Command.IfStatementInfo.CondExpr,
-        /// Number of cmds in the `if` body
-        num_of_cmds: u64,
+        condition: *Interpreter.Command.CondExpr,
     ) QueryError!CondValue {
         switch (condition.*) {
             .literal => |v| return .{ .bool = v },
@@ -187,41 +202,41 @@ pub const CommandExecutor = struct {
                 return .{ .bool = self.last_bool_result.? };
             },
             .expr_and => |expr| {
-                const values = try self.evaluateCondExpr2(w, expr, num_of_cmds);
+                const values = try self.evaluateCondExpr2(w, expr);
                 return .{ .bool = values.@"0".bool and values.@"1".bool };
             },
             .expr_or => |expr| {
-                const values = try self.evaluateCondExpr2(w, expr, num_of_cmds);
+                const values = try self.evaluateCondExpr2(w, expr);
                 return .{ .bool = values.@"0".bool or values.@"1".bool };
             },
             .not_expr => |expr| {
                 const lhs = expr[0];
-                const lhs_value = try self.evaluateCondExpr(w, lhs, num_of_cmds);
+                const lhs_value = try self.evaluateCondExpr(w, lhs);
 
                 return .{ .bool = lhs_value.bool };
             },
             .greater => |expr| {
-                const values = try self.evaluateCondExpr2(w, expr, num_of_cmds);
+                const values = try self.evaluateCondExpr2(w, expr);
                 return .{ .bool = values.@"0".int > values.@"1".int };
             },
             .greater_or_equal => |expr| {
-                const values = try self.evaluateCondExpr2(w, expr, num_of_cmds);
+                const values = try self.evaluateCondExpr2(w, expr);
                 return .{ .bool = values.@"0".int >= values.@"1".int };
             },
             .less => |expr| {
-                const values = try self.evaluateCondExpr2(w, expr, num_of_cmds);
+                const values = try self.evaluateCondExpr2(w, expr);
                 return .{ .bool = values.@"0".int < values.@"1".int };
             },
             .less_or_equal => |expr| {
-                const values = try self.evaluateCondExpr2(w, expr, num_of_cmds);
+                const values = try self.evaluateCondExpr2(w, expr);
                 return .{ .bool = values.@"0".int <= values.@"1".int };
             },
             .equal => |expr| {
-                const values = try self.evaluateCondExpr2(w, expr, num_of_cmds);
+                const values = try self.evaluateCondExpr2(w, expr);
                 return .{ .bool = values.@"0".int == values.@"1".int };
             },
             .diff => |expr| {
-                const values = try self.evaluateCondExpr2(w, expr, num_of_cmds);
+                const values = try self.evaluateCondExpr2(w, expr);
                 return .{ .bool = values.@"0".int != values.@"1".int };
             },
         }
@@ -232,16 +247,15 @@ pub const CommandExecutor = struct {
         self: *CommandExecutor,
         w: *World,
         expr: struct {
-            *Command.IfStatementInfo.CondExpr,
-            *Command.IfStatementInfo.CondExpr,
+            *Command.CondExpr,
+            *Command.CondExpr,
         },
-        num_of_cmds: u64,
     ) QueryError!struct { CondValue, CondValue } {
         const lhs = expr[0];
-        const lhs_value = try self.evaluateCondExpr(w, lhs, num_of_cmds);
+        const lhs_value = try self.evaluateCondExpr(w, lhs);
 
         const rhs = expr[1];
-        const rhs_value = try self.evaluateCondExpr(w, rhs, num_of_cmds);
+        const rhs_value = try self.evaluateCondExpr(w, rhs);
 
         return .{ .@"0" = lhs_value, .@"1" = rhs_value };
     }

@@ -3,7 +3,7 @@ const std = @import("std");
 const Interpreter = @import("Interpreter.zig");
 
 const Command = Interpreter.Command;
-const CondExpr = Interpreter.Command.IfStatementInfo.CondExpr;
+const CondExpr = Interpreter.Command.CondExpr;
 const ParseError = Interpreter.Command.Parser.ParseError;
 const Ast = std.zig.Ast;
 
@@ -114,6 +114,7 @@ pub fn parseNode(
         .call_one => try parseCallNode(alloc, command_parser, ast, idx, list),
         .if_simple => try parseIfNode(alloc, command_parser, ast, idx, list),
         .for_simple => try parseForNode(alloc, command_parser, ast, idx, list),
+        .while_simple => try parseWhileNode(alloc, command_parser, ast, idx, list),
         else => unreachable, // unsupported node tag
     };
 }
@@ -162,9 +163,9 @@ fn parseIfNode(
     var num_of_cmds: u64 = 0;
     const items_count = list.items.len;
 
-    list.append(alloc, .{
+    try list.append(alloc, .{
         .@"if" = .default(),
-    }) catch return Command.Parser.ParseError.OutOfMemory;
+    });
 
     const if_cond = try parseCondExpr(alloc, command_parser, ast, cond_expr_idx, list);
     list.items[items_count].@"if".condition = if_cond;
@@ -185,6 +186,38 @@ fn parseIfNode(
     list.items[items_count].@"if".num_of_cmds = num_of_cmds;
 }
 
+pub fn parseWhileNode(
+    alloc: std.mem.Allocator,
+    command_parser: *Command.Parser,
+    ast: Ast,
+    idx: Ast.Node.Index,
+    list: *std.ArrayList(Command),
+) ParseError!void {
+    const while_statement = ast.whileSimple(idx);
+    const cond_expr_idx = while_statement.ast.cond_expr;
+    const items_count = list.items.len;
+
+    try list.append(alloc, .{
+        .@"while" = .{
+            .start_idx = items_count,
+            .condition = undefined,
+        },
+    });
+
+    const while_cond = try parseCondExpr(alloc, command_parser, ast, cond_expr_idx, list);
+    list.items[items_count].@"while".condition = while_cond;
+
+    const semi_node_idx = while_statement.ast.then_expr;
+    var while_body_buf: [2]Ast.Node.Index = undefined;
+    const while_body_nodes = ast.blockStatements(&while_body_buf, semi_node_idx).?;
+
+    for (while_body_nodes) |i| {
+        try parseNode(alloc, command_parser, ast, i, list);
+    }
+
+    try list.append(alloc, .{ .end_loop = {} });
+}
+
 /// Parse condition expressions in `if`, `while` statements
 pub fn parseCondExpr(
     alloc: std.mem.Allocator,
@@ -192,9 +225,9 @@ pub fn parseCondExpr(
     ast: Ast,
     idx: Ast.Node.Index,
     list: *std.ArrayList(Command),
-) ParseError!Command.IfStatementInfo.CondExpr {
+) ParseError!CondExpr {
     const node_tag = ast.nodeTag(idx);
-    var cond: Command.IfStatementInfo.CondExpr = undefined;
+    var cond: CondExpr = undefined;
 
     switch (node_tag) {
         .identifier => {
@@ -308,14 +341,12 @@ fn parseForNode(
     const semi_node_idx = node_data[1];
     var body_node_idxs_buf: [2]Ast.Node.Index = undefined;
     const body_node_idxs = ast.blockStatements(&body_node_idxs_buf, semi_node_idx).?;
-    var num_of_cmds: u64 = 0;
 
     for (body_node_idxs) |i| {
-        num_of_cmds += 1;
         try parseNode(alloc, command_parser, ast, i, list);
     }
 
-    try list.append(alloc, .{ .end_for = {} });
+    try list.append(alloc, .{ .end_loop = {} });
 }
 
 fn extractErrorFromAst(
