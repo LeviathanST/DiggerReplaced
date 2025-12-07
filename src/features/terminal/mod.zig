@@ -14,8 +14,8 @@ const Buffer = resources.Buffer;
 const State = resources.State;
 const Style = resources.Style;
 
-const Executor = components.CommandExecutor;
 const GameAssets = @import("../../GameAssets.zig");
+const Executor = @import("../command_executor/mod.zig").CommandExecutor;
 
 pub const Terminal = components.Terminal;
 

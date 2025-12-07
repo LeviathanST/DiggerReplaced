@@ -6,7 +6,7 @@ const input = @import("input.zig");
 
 const World = @import("ecs").World;
 const Terminal = @import("../mod.zig").Terminal;
-const Executor = @import("../components.zig").CommandExecutor;
+const Executor = @import("../../command_executor/mod.zig").CommandExecutor;
 
 const Rectangle = ecs_common.Rectangle;
 const Position = ecs_common.Position;

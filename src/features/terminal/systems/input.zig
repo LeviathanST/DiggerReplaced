@@ -4,7 +4,7 @@ const digger = @import("../../digger/mod.zig");
 const utils = @import("../utils.zig");
 
 const Terminal = @import("../components.zig").Terminal;
-const Executor = @import("../components.zig").CommandExecutor;
+const Executor = @import("../../command_executor/mod.zig").CommandExecutor;
 const Interpreter = @import("../../interpreter/Interpreter.zig");
 const World = @import("ecs").World;
 
