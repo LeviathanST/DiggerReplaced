@@ -18,17 +18,18 @@ pub fn execCmds(w: *World, _: std.mem.Allocator) !void {
 
 pub fn handleKeys(
     alloc: std.mem.Allocator,
+    grid: Grid,
     buf: *Buffer,
     ts_backspace: *i64,
 ) !void {
     _ = ts_backspace;
-    if (try handleTyping(alloc, buf)) return;
+    if (try handleTyping(alloc, grid, buf)) return;
 
     // TODO: handle key combination and key holding
     const pressed = rl.getKeyPressed();
     if (pressed != .null) {
         switch (pressed) {
-            .backspace => try buf.remove(alloc),
+            .backspace => try buf.remove(alloc, grid),
             .enter => try buf.newLine(alloc),
             .left => buf.seek(.left),
             .right => buf.seek(.right),
@@ -40,13 +41,17 @@ pub fn handleKeys(
 }
 
 /// Return `true` if typing
-pub fn handleTyping(alloc: std.mem.Allocator, buf: *Buffer) !bool {
+pub fn handleTyping(
+    alloc: std.mem.Allocator,
+    grid: Grid,
+    buf: *Buffer,
+) !bool {
     var key_int = rl.getCharPressed();
 
     while (key_int != 0) : (key_int = rl.getCharPressed()) {
         // allow range 32..127 chars in unicode
         if (key_int >= 32 and key_int < 127) {
-            try buf.insert(alloc, @as(u8, @intCast(key_int)));
+            try buf.insert(alloc, grid, @as(u8, @intCast(key_int)));
         }
     }
 

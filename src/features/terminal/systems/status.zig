@@ -56,10 +56,10 @@ pub fn inWindowResizing(w: *World, _: std.mem.Allocator) !void {
 
 pub fn inFocused(w: *World, _: std.mem.Allocator) !void {
     const state = try w.getMutResource(State);
-    const buf, _ = (try w.query(&.{ *Buffer, Terminal }))[0];
+    const buf, const grid, _ = (try w.query(&.{ *Buffer, Grid, Terminal }))[0];
 
     if (state.is_focused)
-        try input.handleKeys(w.alloc, buf, &state.ts_backspace);
+        try input.handleKeys(w.alloc, grid, buf, &state.ts_backspace);
 }
 
 pub fn inClickedRun(w: *World, _: std.mem.Allocator) !void {

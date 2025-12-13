@@ -17,19 +17,24 @@ pub const Terminal = struct {};
 pub const Buffer = struct {
     // TODO: enhance the way to store `lines`
     // HACK: :)) this is very inefficent
-    lines: Lines,
-    cursor: struct {
-        row: usize = 0,
-        col: usize = 0,
-    } = .{},
+    lines: std.ArrayList(Line),
+    skipped_rows: usize = 0,
+    cursor: Cursor = .{},
     total_line: usize = 1,
 
-    const Lines = std.ArrayList(std.ArrayList(u8));
+    const Line = struct {
+        chars: std.ArrayList(u8) = .empty,
+        vrows: usize = 0,
+    };
+    const Cursor = struct {
+        row: usize = 0,
+        col: usize = 0,
+    };
 
     pub fn init(alloc: std.mem.Allocator) !Buffer {
-        var lines: Lines = .empty;
+        var lines: std.ArrayList(Line) = .empty;
         // init the first line
-        try lines.append(alloc, .empty);
+        try lines.append(alloc, .{});
 
         return .{
             .lines = lines,
@@ -38,7 +43,7 @@ pub const Buffer = struct {
 
     pub fn deinit(self: *Buffer, alloc: std.mem.Allocator) void {
         for (self.lines.items) |*line| {
-            line.deinit(alloc);
+            line.chars.deinit(alloc);
         }
         self.lines.deinit(alloc);
     }
@@ -50,7 +55,7 @@ pub const Buffer = struct {
 
         for (self.lines.items) |line| {
             count = 0;
-            for (line.items) |c| {
+            for (line.chars.items) |c| {
                 count += 1;
                 if (count >= grid.num_of_cols) {
                     count = 1;
@@ -93,11 +98,24 @@ pub const Buffer = struct {
             state.*.frame_counter = 0;
         }
 
-        // TODO: handling over-horizontal
+        const view_pos: Cursor = get_vp: {
+            const max_col_i: usize = @intCast(grid.num_of_cols - 1);
+            if (self.cursor.col > max_col_i) {
+                const curr_vrows = self.cursor.col / max_col_i;
+
+                break :get_vp .{
+                    .row = self.cursor.row + curr_vrows,
+                    .col = self.cursor.col - max_col_i * curr_vrows,
+                };
+            } else {
+                break :get_vp self.cursor;
+            }
+        };
+
         const real_pos = grid.matrix[
             try grid.getActualIndex(
-                @intCast(self.cursor.row),
-                @intCast(self.cursor.col),
+                @intCast(view_pos.row + self.skipped_rows),
+                @intCast(view_pos.col),
             )
         ];
 
@@ -114,7 +132,7 @@ pub const Buffer = struct {
         defer list.deinit(alloc);
 
         for (self.lines.items) |line| {
-            try list.appendSlice(alloc, line.items[0..line.items.len]);
+            try list.appendSlice(alloc, line.chars.items[0..line.chars.items.len]);
             try list.append(alloc, ' ');
         }
 
@@ -124,17 +142,19 @@ pub const Buffer = struct {
     /// Append a character to the cursor position and **right-shift** the cursor.
     ///
     /// Asserts that the current line equals or less than the total line.
-    pub fn insert(self: *Buffer, alloc: std.mem.Allocator, char: u8) !void {
+    pub fn insert(self: *Buffer, alloc: std.mem.Allocator, grid: Grid, char: u8) !void {
         std.debug.assert(self.cursor.row <= self.total_line);
 
         const curr_idx = self.cursor.col;
-        const curr_line = &self.lines.items[self.cursor.row];
+        const curr_line = &self.lines.items[self.cursor.row].chars;
 
-        if (curr_idx == curr_line.*.items.len) { // at the last col
+        if (curr_idx == curr_line.items.len) { // at the last col
             try curr_line.append(alloc, char);
         } else { // at a random index which is not the last col
             try utils.insertAndShiftMemory(alloc, u8, curr_line, curr_idx, char);
         }
+
+        self.calcVrows(grid);
         self.seek(.right);
     }
 
@@ -147,16 +167,16 @@ pub const Buffer = struct {
     /// current line. Otherwise, the cursor will move left.
     ///
     /// Asserts that the current line equals or less than the total line
-    pub fn remove(self: *Buffer, alloc: std.mem.Allocator) !void {
+    pub fn remove(self: *Buffer, alloc: std.mem.Allocator, grid: Grid) !void {
         std.debug.assert(self.cursor.row <= self.total_line);
-        const curr_line = &self.lines.items[self.cursor.row];
+        const curr_line = &self.lines.items[self.cursor.row].chars;
         // nothing to remove
         if (self.cursor.row == 0 and curr_line.items.len == 0) return;
         // at the first column and first row
         if (self.cursor.row == 0 and self.cursor.col == 0) return;
 
         if (self.cursor.col <= 0) {
-            const prev_line = self.lines.items[self.cursor.row - 1];
+            const prev_line = self.lines.items[self.cursor.row - 1].chars;
 
             if (prev_line.items.len > 0) {
                 const num_char_of_prev = prev_line.items.len;
@@ -165,7 +185,7 @@ pub const Buffer = struct {
                 self.cursor.col = 0;
             }
 
-            var line = self.lines.orderedRemove(self.cursor.row);
+            var line = self.lines.orderedRemove(self.cursor.row).chars;
             defer line.deinit(alloc);
             self.seek(.up);
             self.total_line -= 1;
@@ -174,10 +194,12 @@ pub const Buffer = struct {
                 try self
                     .lines
                     .items[self.cursor.row]
+                    .chars
                     .appendSlice(alloc, line.items);
             }
         } else {
             _ = curr_line.orderedRemove(self.cursor.col - 1);
+            self.calcVrows(grid);
             self.seek(.left);
         }
     }
@@ -189,7 +211,7 @@ pub const Buffer = struct {
     /// * If the current line is not the last line, all lines after the
     /// current line will shift to the right in `lines`.
     pub fn newLine(self: *Buffer, alloc: std.mem.Allocator) !void {
-        const curr_line = &self.lines.items[self.cursor.row];
+        const curr_line = &self.lines.items[self.cursor.row].chars;
 
         var chars: []u8 = "";
         if (curr_line.*.items.len > 0 and self.cursor.col <= curr_line.*.items.len - 1) {
@@ -201,18 +223,18 @@ pub const Buffer = struct {
             chars = after_i;
         }
 
-        const new_line: std.ArrayList(u8) = create_new_line: {
+        const new_line: Line = create_new_line: {
             if (chars.len > 0) {
-                break :create_new_line .fromOwnedSlice(chars);
+                break :create_new_line .{ .chars = .fromOwnedSlice(chars) };
             } else {
-                break :create_new_line .empty;
+                break :create_new_line .{ .chars = .empty };
             }
         };
 
         if (self.cursor.row != self.total_line - 1) {
             try utils.insertAndShiftMemory(
                 alloc,
-                std.ArrayList(u8),
+                Line,
                 &self.lines,
                 self.cursor.row + 1,
                 new_line,
@@ -222,8 +244,22 @@ pub const Buffer = struct {
         }
 
         self.total_line += 1;
-        self.cursor.row += 1;
-        self.cursor.col = 0;
+        self.seek(.down);
+    }
+
+    /// Calculate num of virtual rows at the current cursor row
+    inline fn calcVrows(self: *Buffer, grid: Grid) void {
+        const max_col_i: usize = @intCast(grid.num_of_cols - 1);
+        const curr_line = &self.lines.items[self.cursor.row];
+
+        curr_line.*.vrows = vrows: {
+            if (self.cursor.col / max_col_i < 0) break :vrows 0;
+            break :vrows @divFloor(self.cursor.col, max_col_i);
+        };
+    }
+
+    inline fn getVrows(self: Buffer, row_index: usize) usize {
+        return self.lines.items[row_index].vrows;
     }
 
     /// Move the cursor with a direction.
@@ -242,33 +278,43 @@ pub const Buffer = struct {
             .up, .down => |up_or_down| {
                 switch (up_or_down) {
                     .up => {
-                        if (self.cursor.row > 0)
-                            self.cursor.row -= 1;
+                        if (self.cursor.row <= 0) return;
+                        self.cursor.row -= 1;
                     },
                     .down => {
-                        if (self.cursor.row < self.total_line)
-                            self.cursor.row += 1;
+                        if (self.cursor.row >= self.total_line - 1) return;
+                        self.cursor.row += 1;
                     },
                     else => unreachable,
                 }
 
+                const num_char_of_target = self.lines.items[self.cursor.row].chars.items.len;
+
                 // move cursor.col if neccessary
-                if (self.cursor.col < self.lines.items[self.cursor.row].items.len) {
+                if (self.cursor.col < num_char_of_target) {
                     // do nothing
-                } else if (self.lines.items[self.cursor.row].items.len > 0) {
-                    // move to the last one of the previous line
-                    const num_char_of_prev = self.lines.items[self.cursor.row].items.len;
-                    self.cursor.col = num_char_of_prev;
+                } else if (num_char_of_target > 0) {
+                    // move to the last one of the previous line or the next line
+                    self.cursor.col = num_char_of_target;
                 } else {
                     self.cursor.col = 0;
                 }
+
+                self.skipped_rows = get_prev_vrows: {
+                    var skipped_rows: usize = 0;
+                    var idx: isize = @as(isize, @intCast(self.cursor.row)) - 1;
+                    while (idx >= 0) : (idx -= 1) {
+                        skipped_rows += self.getVrows(@intCast(idx));
+                    }
+                    break :get_prev_vrows skipped_rows;
+                };
             },
             .left => {
                 if (self.cursor.col > 0)
                     self.cursor.col -= 1;
             },
             .right => {
-                const curr_line = self.lines.items[self.cursor.row];
+                const curr_line = self.lines.items[self.cursor.row].chars;
 
                 if (self.cursor.col + 1 <= curr_line.items.len)
                     self.cursor.col += 1;
