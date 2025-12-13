@@ -18,6 +18,8 @@ pub const Buffer = struct {
     // TODO: enhance the way to store `lines`
     // HACK: :)) this is very inefficent
     lines: std.ArrayList(Line),
+    /// num of rows (includes virtual rows & real rows)
+    /// of previous lines.
     skipped_rows: usize = 0,
     cursor: Cursor = .{},
     total_line: usize = 1,
@@ -169,7 +171,7 @@ pub const Buffer = struct {
     /// Asserts that the current line equals or less than the total line
     pub fn remove(self: *Buffer, alloc: std.mem.Allocator, grid: Grid) !void {
         std.debug.assert(self.cursor.row <= self.total_line);
-        const curr_line = &self.lines.items[self.cursor.row].chars;
+        const curr_line = &self.getMutCurrLine().chars;
         // nothing to remove
         if (self.cursor.row == 0 and curr_line.items.len == 0) return;
         // at the first column and first row
@@ -192,8 +194,7 @@ pub const Buffer = struct {
 
             if (line.items.len > 0) {
                 try self
-                    .lines
-                    .items[self.cursor.row]
+                    .getMutCurrLine()
                     .chars
                     .appendSlice(alloc, line.items);
             }
@@ -210,11 +211,11 @@ pub const Buffer = struct {
     /// will be moved to the new line.
     /// * If the current line is not the last line, all lines after the
     /// current line will shift to the right in `lines`.
-    pub fn newLine(self: *Buffer, alloc: std.mem.Allocator) !void {
-        const curr_line = &self.lines.items[self.cursor.row].chars;
+    pub fn newLine(self: *Buffer, alloc: std.mem.Allocator, grid: Grid) !void {
+        var curr_line = &self.getMutCurrLine().chars;
 
         var chars: []u8 = "";
-        if (curr_line.*.items.len > 0 and self.cursor.col <= curr_line.*.items.len - 1) {
+        if (curr_line.items.len > 0 and self.cursor.col <= curr_line.items.len - 1) {
             const after_i = try alloc.dupe(
                 u8,
                 curr_line.items[self.cursor.col..curr_line.items.len],
@@ -243,23 +244,52 @@ pub const Buffer = struct {
             try self.lines.append(alloc, new_line);
         }
 
+        self.calcVrows(grid);
         self.total_line += 1;
-        self.seek(.down);
+        self.cursor.row += 1;
+        self.cursor.col = 0;
+        self.skipRows();
     }
 
     /// Calculate num of virtual rows at the current cursor row
-    inline fn calcVrows(self: *Buffer, grid: Grid) void {
+    ///
+    /// This function should be called each time elements in the
+    /// current line are changed to re-calculate `vrows`.
+    fn calcVrows(self: *Buffer, grid: Grid) void {
         const max_col_i: usize = @intCast(grid.num_of_cols - 1);
-        const curr_line = &self.lines.items[self.cursor.row];
+        const curr_line = self.getMutCurrLine();
 
-        curr_line.*.vrows = vrows: {
-            if (self.cursor.col / max_col_i < 0) break :vrows 0;
-            break :vrows @divFloor(self.cursor.col, max_col_i);
-        };
+        if (self.cursor.col / max_col_i < 0) {
+            curr_line.vrows = 0;
+        } else {
+            curr_line.vrows = @divFloor(self.cursor.col, max_col_i);
+        }
     }
 
     inline fn getVrows(self: Buffer, row_index: usize) usize {
         return self.lines.items[row_index].vrows;
+    }
+
+    inline fn getCurrLine(self: Buffer) Line {
+        return self.lines.items[self.cursor.row];
+    }
+
+    inline fn getMutCurrLine(self: Buffer) *Line {
+        return &self.lines.items[self.cursor.row];
+    }
+
+    /// Calculate and assign the value to `skipped_rows` at the
+    /// current cursor position.
+    ///
+    /// This function should be called each time go to the next
+    /// or previous line to re-calculate skipped rows.
+    fn skipRows(self: *Buffer) void {
+        var skipped_rows: usize = 0;
+        var idx: isize = @as(isize, @intCast(self.cursor.row)) - 1;
+        while (idx >= 0) : (idx -= 1) {
+            skipped_rows += self.getVrows(@intCast(idx));
+        }
+        self.skipped_rows = skipped_rows;
     }
 
     /// Move the cursor with a direction.
@@ -288,7 +318,7 @@ pub const Buffer = struct {
                     else => unreachable,
                 }
 
-                const num_char_of_target = self.lines.items[self.cursor.row].chars.items.len;
+                const num_char_of_target = self.getCurrLine().chars.items.len;
 
                 // move cursor.col if neccessary
                 if (self.cursor.col < num_char_of_target) {
@@ -299,22 +329,14 @@ pub const Buffer = struct {
                 } else {
                     self.cursor.col = 0;
                 }
-
-                self.skipped_rows = get_prev_vrows: {
-                    var skipped_rows: usize = 0;
-                    var idx: isize = @as(isize, @intCast(self.cursor.row)) - 1;
-                    while (idx >= 0) : (idx -= 1) {
-                        skipped_rows += self.getVrows(@intCast(idx));
-                    }
-                    break :get_prev_vrows skipped_rows;
-                };
+                self.skipRows();
             },
             .left => {
                 if (self.cursor.col > 0)
                     self.cursor.col -= 1;
             },
             .right => {
-                const curr_line = self.lines.items[self.cursor.row].chars;
+                const curr_line = self.getCurrLine().chars;
 
                 if (self.cursor.col + 1 <= curr_line.items.len)
                     self.cursor.col += 1;

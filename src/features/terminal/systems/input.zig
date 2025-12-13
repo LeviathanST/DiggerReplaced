@@ -30,7 +30,7 @@ pub fn handleKeys(
     if (pressed != .null) {
         switch (pressed) {
             .backspace => try buf.remove(alloc, grid),
-            .enter => try buf.newLine(alloc),
+            .enter => try buf.newLine(alloc, grid),
             .left => buf.seek(.left),
             .right => buf.seek(.right),
             .up => buf.seek(.up),
