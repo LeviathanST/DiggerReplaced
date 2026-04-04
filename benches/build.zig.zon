@@ -1,0 +1,17 @@
+.{
+    .name = .benches,
+    .version = "0.0.1",
+    .dependencies = .{
+        .zbench = .{
+            .url = "git+https://github.com/hendriknielaender/zBench?ref=zig-0.15.1#463f8d5349daf72430697c9fe42cfe0a68729859",
+            .hash = "zbench-0.11.1-YTdc7zgmAQDtDcHPFwsLeawui27WjMLWmUwrfz7pIlB2",
+        },
+        .raylib_zig = .{
+            .url = "git+https://github.com/raylib-zig/raylib-zig?ref=devel#3cd4d3179d967fc8b931514603fdbc4a43a1d771",
+            .hash = "raylib_zig-5.6.0-dev-KE8REE1LBQCL7lia-DwUkusWI1G4kJmhtatLh2kNsuiE",
+        },
+    },
+    .minimum_zig_version = "0.15.1",
+    .paths = .{""},
+    .fingerprint = 0x41afa866da5157c3,
+}
